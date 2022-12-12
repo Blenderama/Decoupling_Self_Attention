@@ -23,12 +23,18 @@ from ViT_orig_LRP import vit_base_patch16_224 as vit_orig_LRP
 
 from sklearn.metrics import precision_recall_curve
 import matplotlib.pyplot as plt
-
+import cv2
 import torch.nn.functional as F
 import pdb
 
-plt.switch_backend('agg')
+def show_cam_on_image(img, mask):
+    heatmap = cv2.applyColorMap(np.uint8(255 * mask), cv2.COLORMAP_JET)
+    heatmap = np.float32(heatmap) / 255
+    cam = heatmap + np.float32(img)
+    cam = cam / np.max(cam)
+    return cam
 
+plt.switch_backend('agg')
 
 # hyperparameters
 num_workers = 0
@@ -111,12 +117,9 @@ if not os.path.exists(os.path.join(saver.results_dir, 'input')):
 if not os.path.exists(os.path.join(saver.results_dir, 'explain')):
     os.makedirs(os.path.join(saver.results_dir, 'explain'))
 
-args.exp_img_path = os.path.join(saver.results_dir, 'explain/img')
+args.exp_img_path = os.path.join(saver.results_dir, 'viz')
 if not os.path.exists(args.exp_img_path):
     os.makedirs(args.exp_img_path)
-args.exp_np_path = os.path.join(saver.results_dir, 'explain/np')
-if not os.path.exists(args.exp_np_path):
-    os.makedirs(args.exp_np_path)
 
 # Data
 normalize = transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
@@ -137,16 +140,16 @@ dl = DataLoader(ds, batch_size=batch_size, shuffle=False, num_workers=1, drop_la
 model = vit_base_patch16_224(pretrained=True).cuda()
 baselines = Baselines(model)
 
-# LRP
-model_LRP = vit_LRP(pretrained=True).cuda()
-model_LRP.eval()
-lrp = LRP(model_LRP)
-
 if args.method in ['lrp_last_layer']:
     # orig LRP
     model_orig_LRP = vit_orig_LRP(pretrained=True).cuda()
     model_orig_LRP.eval()
     orig_lrp = LRP(model_orig_LRP)
+# else:
+    # LRP
+model_LRP = vit_LRP(pretrained=True).cuda()
+model_LRP.eval()
+lrp = LRP(model_LRP)
 
 metric = IoU(2, ignore_index=-1)
 
@@ -169,16 +172,7 @@ def compute_pred(output):
 
 
 def eval_batch(image, labels, evaluator, index):
-    total_time = None
     evaluator.zero_grad()
-    # Save input image
-    if args.save_img:
-        img = image[0].permute(1, 2, 0).data.cpu().numpy()
-        img = 255 * (img - img.min()) / (img.max() - img.min())
-        img = img.astype('uint8')
-        Image.fromarray(img, 'RGB').save(os.path.join(saver.results_dir, 'input/{}_input.png'.format(index)))
-        Image.fromarray((labels.repeat(3, 1, 1).permute(1, 2, 0).data.cpu().numpy() * 255).astype('uint8'), 'RGB').save(
-            os.path.join(saver.results_dir, 'input/{}_mask.png'.format(index)))
 
     image.requires_grad = True
 
@@ -188,34 +182,32 @@ def eval_batch(image, labels, evaluator, index):
     
 #     pdb.set_trace()
     output = lrp.model(image.cuda())
-    
+#     if index == None:
     cls_index = np.argmax(output.cpu().data.numpy(), axis=-1)
-    if args.method != 'perturb_all_fast':
-        lrp.model.zero_grad()
-        one_hot = np.zeros((1, output.size()[-1]), dtype=np.float32)
-        one_hot[0, cls_index] = 1
-        one_hot_vector = one_hot
-        one_hot = torch.from_numpy(one_hot).requires_grad_(True)
-        one_hot = torch.sum(one_hot.cuda() * output)
-        one_hot.backward(retain_graph=True)
+    lrp.model.zero_grad()
+    one_hot = np.zeros((1, output.size()[-1]), dtype=np.float32)
+    one_hot[0, cls_index] = 1
+    one_hot_vector = one_hot
+    one_hot = torch.from_numpy(one_hot).requires_grad_(True)
+    one_hot = torch.sum(one_hot.cuda() * output)
+    one_hot.backward(retain_graph=True)
     
     # segmentation test for the rollout baseline
     if args.method == 'rollout':
         Res = baselines.generate_rollout(image.cuda(), start_layer=1).reshape(batch_size, 1, 14, 14)
-    
+#     elif args.method == 'rollout':
+#         Res = baselines.generate_rollout(image.cuda(), start_layer=1).reshape(batch_size, 1, 14, 14)
+
     # segmentation test for the LRP baseline (this is full LRP, not partial)
     elif args.method == 'full_lrp':
         Res = orig_lrp.generate_LRP(image.cuda(), method="full").reshape(batch_size, 1, 224, 224)
     
     # segmentation test for our method
     elif args.method == 'transformer_attribution':
-        Res, total_time = lrp.generate_LRP(image.cuda(), start_layer=1, method="transformer_attribution")
-        Res = Res.reshape(batch_size, 1, 14, 14)
-    elif args.method == 'transformer_attribution_0':
-        Res = lrp.generate_LRP(image.cuda(), start_layer=0, method="transformer_attribution").reshape(batch_size, 1, 14, 14)
+        Res = lrp.generate_LRP(image.cuda(), start_layer=1, method="transformer_attribution").reshape(batch_size, 1, 14, 14)
     elif args.method == 'sas':
-        Res, total_time = lrp.generate_LRP(image.cuda(), start_layer=1, method="sas")
-        Res = Res.reshape(batch_size, 1, 14, 14)
+        Res = lrp.generate_LRP(image.cuda(), start_layer=1, method="sas").reshape(batch_size, 1, 14, 14)
+
     elif args.method == 'transformer_attribution_0.5':
         Res = lrp.generate_LRP(image.cuda()*0.5, start_layer=1, method="transformer_attribution").reshape(batch_size, 1, 14, 14)
     elif args.method == 'transformer_attribution_0.1':
@@ -306,151 +298,43 @@ def eval_batch(image, labels, evaluator, index):
 #         Res = lrp.generate_LRP(image.cuda(), start_layer=0, method="perturb_all").reshape(batch_size, 1, 14, 14)
     elif args.method == 'perturb_none':
         Res = lrp.generate_LRP(image.cuda(), start_layer=0, method="perturb_all", index=cls_index).reshape(batch_size, 1, 14, 14)
-    elif args.method == 'perturb_patch':
-        Res = lrp.generate_LRP(image.cuda(), start_layer=0, method="perturb_patch", index=cls_index).reshape(batch_size, 1, 14, 14)
-    elif args.method == 'perturb_patch_all':
-        Res = lrp.generate_LRP(image.cuda(), start_layer=0, method="perturb_patch_all", ext_attn_list=[blk.attn.get_attn() for blk in lrp.model.blocks], ext_v_list = [blk.attn.get_v() for blk in lrp.model.blocks], ext_y_list=[blk.get_y() for blk in lrp.model.blocks], index=cls_index).reshape(batch_size, 1, 14, 14)
     elif args.method == 'perturb_attn':
         Res = lrp.generate_LRP(image.cuda(), start_layer=0, method="perturb_all", ext_attn_list=[blk.attn.get_attn() for blk in lrp.model.blocks], index=cls_index).reshape(batch_size, 1, 14, 14)
     elif args.method == 'perturb_attn_v':
         Res = lrp.generate_LRP(image.cuda(), start_layer=0, method="perturb_all", ext_attn_list=[blk.attn.get_attn() for blk in lrp.model.blocks], ext_v_list = [blk.attn.get_v() for blk in lrp.model.blocks], index=cls_index).reshape(batch_size, 1, 14, 14)
-    elif args.method == 'perturb_all_fast':
-        start_layer = 0
-        Res = lrp.generate_LRP(image.cuda(), start_layer=start_layer, method="perturb_all_fast", ext_attn_list=[blk.attn.get_attn() for blk in lrp.model.blocks], ext_v_list = [blk.attn.get_v() for blk in lrp.model.blocks], ext_y_list=[blk.get_y() for blk in lrp.model.blocks], index=cls_index).reshape(batch_size, 1, 14, 14)
-
     elif args.method.startswith('perturb_all_'):
         start_layer = int(args.method.split('_')[-1])
         Res = lrp.generate_LRP(image.cuda(), start_layer=start_layer, method="perturb_all", ext_attn_list=[blk.attn.get_attn() for blk in lrp.model.blocks], ext_v_list = [blk.attn.get_v() for blk in lrp.model.blocks], ext_y_list=[blk.get_y() for blk in lrp.model.blocks], index=cls_index).reshape(batch_size, 1, 14, 14)
 
-    if args.method != 'full_lrp':
+    if args.method not in ['full_lrp' ,'input']:
         # interpolate to full image size (224,224)
         Res = torch.nn.functional.interpolate(Res, scale_factor=16, mode='bilinear', align_corners=False).cuda()
-    
-    # threshold between FG and BG is the mean    
-    Res = (Res - Res.min()) / (Res.max() - Res.min())
-
-    # Evaluate Segmentation
-    batch_inter, batch_union, batch_correct, batch_label = 0, 0, 0, 0
-    batch_ap, batch_f1 = 0, 0
-    
-    ret = Res.mean()
-#     ret = Res.max()*0.2
-
-    Res_1 = Res.gt(ret).type(Res.type())
-    Res_0 = Res.le(ret).type(Res.type())
-
-    Res_1_AP = Res
-    Res_0_AP = 1-Res
-
-    Res_1[Res_1 != Res_1] = 0
-    Res_0[Res_0 != Res_0] = 0
-    Res_1_AP[Res_1_AP != Res_1_AP] = 0
-    Res_0_AP[Res_0_AP != Res_0_AP] = 0
-
-
-    if args.save_img:
-        # Save predicted mask
-        mask = F.interpolate(Res_1, [64, 64], mode='bilinear', align_corners=True)
-        mask = mask[0].squeeze().data.cpu().numpy()
-        # mask = Res_1[0].squeeze().data.cpu().numpy()
-        mask = 255 * mask
-        mask = mask.astype('uint8')
-        imageio.imsave(os.path.join(args.exp_img_path, 'mask_' + str(index) + '.jpg'), mask)
-
-        relevance = F.interpolate(Res, [64, 64], mode='bilinear', align_corners=True)
-        relevance = relevance[0].permute(1, 2, 0).data.cpu().numpy()
-        # relevance = Res[0].permute(1, 2, 0).data.cpu().numpy()
-        hm = np.sum(relevance, axis=-1)
-        maps = (render.hm_to_rgb(hm, scaling=3, sigma=1, cmap='seismic') * 255).astype(np.uint8)
-        imageio.imsave(os.path.join(args.exp_img_path, 'heatmap_' + str(index) + '.jpg'), maps)
-    # TEST
-    if Res.max() == 0:
-        pred = Res.clamp(min=args.thr)
+    original_image = image[0].permute(1, 2, 0).data.cpu().numpy()
+    original_image = (original_image - original_image.min()) / (original_image.max() - original_image.min())
+    if args.method != 'input':
+        # threshold between FG and BG is the mean    
+        Res = (Res - Res.min()) / (Res.max() - Res.min())
+        vis = show_cam_on_image(original_image, Res[0,0].detach().cpu().numpy())
+        vis =  np.uint8(255 * vis)
+        vis = cv2.cvtColor(np.array(vis), cv2.COLOR_RGB2BGR)
     else:
-        pred = Res.clamp(min=args.thr) / (Res.max())
-    pred = pred.view(-1).data.cpu().numpy()
-    target = labels.view(-1).data.cpu().numpy()
-    # print("target", target.shape)
-
-    output = torch.cat((Res_0, Res_1), 1)
-    output_AP = torch.cat((Res_0_AP, Res_1_AP), 1)
-
-    # Segmentation resutls
-    correct, labeled = batch_pix_accuracy(output[0].data.cpu(), labels[0])
-    inter, union = batch_intersection_union(output[0].data.cpu(), labels[0], 2)
-    batch_correct += correct
-    batch_label += labeled
-    batch_inter += inter
-    batch_union += union
-    # print("output", output.shape)
-    # print("ap labels", labels.shape)
-    # ap = np.nan_to_num(get_ap_scores(output, labels))
-    ap = np.nan_to_num(get_ap_scores(output_AP, labels))
-    f1 = np.nan_to_num(get_f1_scores(output[0, 1].data.cpu(), labels[0]))
-    batch_ap += ap
-    batch_f1 += f1
-
-    return batch_correct, batch_label, batch_inter, batch_union, batch_ap, batch_f1, pred, target, total_time
+        vis = original_image
+        vis =  np.uint8(255 * vis)
+#         vis = cv2.cvtColor(np.array(vis), cv2.COLOR_RGB2BGR)
+    imageio.imsave(os.path.join(args.exp_img_path, 'viz_' + str(index) + '.jpg'), vis)
 
 
 total_inter, total_union, total_correct, total_label = np.int64(0), np.int64(0), np.int64(0), np.int64(0)
 total_ap, total_f1 = [], []
 
 predictions, targets = [], []
-sum_total_time = 0
 for batch_idx, (image, labels) in enumerate(iterator):
-#     if batch_idx == 101:
+#     if batch_idx == 10:
 #         break
     if args.method == "blur":
         images = (image[0].cuda(), image[1].cuda())
     else:
         images = image.cuda()
     labels = labels.cuda()
-    # print("image", image.shape)
-    # print("lables", labels.shape)
 
-    correct, labeled, inter, union, ap, f1, pred, target, total_time = eval_batch(images, labels, model, batch_idx)
-    if total_time:
-        sum_total_time += total_time
-    predictions.append(pred)
-    targets.append(target)
-
-    total_correct += correct.astype('int64')
-    total_label += labeled.astype('int64')
-    total_inter += inter.astype('int64')
-    total_union += union.astype('int64')
-    total_ap += [ap]
-    total_f1 += [f1]
-    pixAcc = np.float64(1.0) * total_correct / (np.spacing(1, dtype=np.float64) + total_label)
-    IoU = np.float64(1.0) * total_inter / (np.spacing(1, dtype=np.float64) + total_union)
-    mIoU = IoU.mean()
-    mAp = np.mean(total_ap)
-    mF1 = np.mean(total_f1)
-    iterator.set_description('pixAcc: %.4f, mIoU: %.4f, mAP: %.4f, mF1: %.4f' % (pixAcc, mIoU, mAp, mF1))
-#     print(IoU)
-predictions = np.concatenate(predictions)
-targets = np.concatenate(targets)
-
-pr, rc, thr = precision_recall_curve(targets, predictions)
-np.save(os.path.join(saver.experiment_dir, 'precision.npy'), pr)
-np.save(os.path.join(saver.experiment_dir, 'recall.npy'), rc)
-
-plt.figure()
-plt.plot(rc, pr)
-plt.savefig(os.path.join(saver.experiment_dir, 'PR_curve_{}.png'.format(args.method)))
-
-txtfile = os.path.join(saver.experiment_dir, 'result_mIoU_%.4f.txt' % mIoU)
-# txtfile = 'result_mIoU_%.4f.txt' % mIoU
-fh = open(txtfile, 'w')
-print("Mean IoU over %d classes: %.4f\n" % (2, mIoU))
-print("Pixel-wise Accuracy: %2.2f%%\n" % (pixAcc * 100))
-print("Mean AP over %d classes: %.4f\n" % (2, mAp))
-print("Mean F1 over %d classes: %.4f\n" % (2, mF1))
-print("sum_total_time: %.4f\n" % (sum_total_time))
-
-fh.write("Mean IoU over %d classes: %.4f\n" % (2, mIoU))
-fh.write("Pixel-wise Accuracy: %2.2f%%\n" % (pixAcc * 100))
-fh.write("Mean AP over %d classes: %.4f\n" % (2, mAp))
-fh.write("Mean F1 over %d classes: %.4f\n" % (2, mF1))
-fh.write("sum_total_time: %.4f\n" % (sum_total_time))
-fh.close()
+    eval_batch(images, labels, model, batch_idx)

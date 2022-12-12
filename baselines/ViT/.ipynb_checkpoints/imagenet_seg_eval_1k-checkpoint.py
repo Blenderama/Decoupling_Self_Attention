@@ -169,7 +169,6 @@ def compute_pred(output):
 
 
 def eval_batch(image, labels, evaluator, index):
-    total_time = None
     evaluator.zero_grad()
     # Save input image
     if args.save_img:
@@ -188,16 +187,15 @@ def eval_batch(image, labels, evaluator, index):
     
 #     pdb.set_trace()
     output = lrp.model(image.cuda())
-    
+#     if index == None:
     cls_index = np.argmax(output.cpu().data.numpy(), axis=-1)
-    if args.method != 'perturb_all_fast':
-        lrp.model.zero_grad()
-        one_hot = np.zeros((1, output.size()[-1]), dtype=np.float32)
-        one_hot[0, cls_index] = 1
-        one_hot_vector = one_hot
-        one_hot = torch.from_numpy(one_hot).requires_grad_(True)
-        one_hot = torch.sum(one_hot.cuda() * output)
-        one_hot.backward(retain_graph=True)
+    lrp.model.zero_grad()
+    one_hot = np.zeros((1, output.size()[-1]), dtype=np.float32)
+    one_hot[0, cls_index] = 1
+    one_hot_vector = one_hot
+    one_hot = torch.from_numpy(one_hot).requires_grad_(True)
+    one_hot = torch.sum(one_hot.cuda() * output)
+    one_hot.backward(retain_graph=True)
     
     # segmentation test for the rollout baseline
     if args.method == 'rollout':
@@ -209,13 +207,11 @@ def eval_batch(image, labels, evaluator, index):
     
     # segmentation test for our method
     elif args.method == 'transformer_attribution':
-        Res, total_time = lrp.generate_LRP(image.cuda(), start_layer=1, method="transformer_attribution")
-        Res = Res.reshape(batch_size, 1, 14, 14)
+        Res = lrp.generate_LRP(image.cuda(), start_layer=1, method="transformer_attribution").reshape(batch_size, 1, 14, 14)
     elif args.method == 'transformer_attribution_0':
         Res = lrp.generate_LRP(image.cuda(), start_layer=0, method="transformer_attribution").reshape(batch_size, 1, 14, 14)
     elif args.method == 'sas':
-        Res, total_time = lrp.generate_LRP(image.cuda(), start_layer=1, method="sas")
-        Res = Res.reshape(batch_size, 1, 14, 14)
+        Res = lrp.generate_LRP(image.cuda(), start_layer=1, method="sas").reshape(batch_size, 1, 14, 14)
     elif args.method == 'transformer_attribution_0.5':
         Res = lrp.generate_LRP(image.cuda()*0.5, start_layer=1, method="transformer_attribution").reshape(batch_size, 1, 14, 14)
     elif args.method == 'transformer_attribution_0.1':
@@ -314,10 +310,6 @@ def eval_batch(image, labels, evaluator, index):
         Res = lrp.generate_LRP(image.cuda(), start_layer=0, method="perturb_all", ext_attn_list=[blk.attn.get_attn() for blk in lrp.model.blocks], index=cls_index).reshape(batch_size, 1, 14, 14)
     elif args.method == 'perturb_attn_v':
         Res = lrp.generate_LRP(image.cuda(), start_layer=0, method="perturb_all", ext_attn_list=[blk.attn.get_attn() for blk in lrp.model.blocks], ext_v_list = [blk.attn.get_v() for blk in lrp.model.blocks], index=cls_index).reshape(batch_size, 1, 14, 14)
-    elif args.method == 'perturb_all_fast':
-        start_layer = 0
-        Res = lrp.generate_LRP(image.cuda(), start_layer=start_layer, method="perturb_all_fast", ext_attn_list=[blk.attn.get_attn() for blk in lrp.model.blocks], ext_v_list = [blk.attn.get_v() for blk in lrp.model.blocks], ext_y_list=[blk.get_y() for blk in lrp.model.blocks], index=cls_index).reshape(batch_size, 1, 14, 14)
-
     elif args.method.startswith('perturb_all_'):
         start_layer = int(args.method.split('_')[-1])
         Res = lrp.generate_LRP(image.cuda(), start_layer=start_layer, method="perturb_all", ext_attn_list=[blk.attn.get_attn() for blk in lrp.model.blocks], ext_v_list = [blk.attn.get_v() for blk in lrp.model.blocks], ext_y_list=[blk.get_y() for blk in lrp.model.blocks], index=cls_index).reshape(batch_size, 1, 14, 14)
@@ -390,17 +382,16 @@ def eval_batch(image, labels, evaluator, index):
     batch_ap += ap
     batch_f1 += f1
 
-    return batch_correct, batch_label, batch_inter, batch_union, batch_ap, batch_f1, pred, target, total_time
+    return batch_correct, batch_label, batch_inter, batch_union, batch_ap, batch_f1, pred, target
 
 
 total_inter, total_union, total_correct, total_label = np.int64(0), np.int64(0), np.int64(0), np.int64(0)
 total_ap, total_f1 = [], []
 
 predictions, targets = [], []
-sum_total_time = 0
 for batch_idx, (image, labels) in enumerate(iterator):
-#     if batch_idx == 101:
-#         break
+    if batch_idx > 10:
+        pdb.set_trace()
     if args.method == "blur":
         images = (image[0].cuda(), image[1].cuda())
     else:
@@ -409,9 +400,8 @@ for batch_idx, (image, labels) in enumerate(iterator):
     # print("image", image.shape)
     # print("lables", labels.shape)
 
-    correct, labeled, inter, union, ap, f1, pred, target, total_time = eval_batch(images, labels, model, batch_idx)
-    if total_time:
-        sum_total_time += total_time
+    correct, labeled, inter, union, ap, f1, pred, target = eval_batch(images, labels, model, batch_idx)
+
     predictions.append(pred)
     targets.append(target)
 
@@ -446,11 +436,9 @@ print("Mean IoU over %d classes: %.4f\n" % (2, mIoU))
 print("Pixel-wise Accuracy: %2.2f%%\n" % (pixAcc * 100))
 print("Mean AP over %d classes: %.4f\n" % (2, mAp))
 print("Mean F1 over %d classes: %.4f\n" % (2, mF1))
-print("sum_total_time: %.4f\n" % (sum_total_time))
 
 fh.write("Mean IoU over %d classes: %.4f\n" % (2, mIoU))
 fh.write("Pixel-wise Accuracy: %2.2f%%\n" % (pixAcc * 100))
 fh.write("Mean AP over %d classes: %.4f\n" % (2, mAp))
 fh.write("Mean F1 over %d classes: %.4f\n" % (2, mF1))
-fh.write("sum_total_time: %.4f\n" % (sum_total_time))
 fh.close()

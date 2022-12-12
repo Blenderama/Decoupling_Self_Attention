@@ -43,8 +43,8 @@ def compute_saliency_and_save(args):
                                        dtype=np.int32,
                                        compression="gzip")
         for batch_idx, (data, target) in enumerate(tqdm(sample_loader)):
-#             if batch_idx > 100:
-#                 break
+            if batch_idx > 10:
+                break
             if first:
                 first = False
                 data_cam.resize(data_cam.shape[0] + data.shape[0] - 1, axis=0)
@@ -142,15 +142,8 @@ def compute_saliency_and_save(args):
                 
             elif args.method == 'perturb_all_0':
                 Res = lrp.generate_LRP(data, start_layer=0, method="perturb_all", index=cls_index, ext_attn_list=[blk.attn.get_attn() for blk in lrp.model.blocks], ext_v_list = [blk.attn.get_v() for blk in lrp.model.blocks], ext_y_list=[blk.get_y() for blk in lrp.model.blocks]).reshape(data.shape[0], 1, 14, 14)
-            
-            elif args.method == 'perturb_all_fast':
-                Res = lrp.generate_LRP(data, start_layer=0, method="perturb_all_fast", index=cls_index, ext_attn_list=[blk.attn.get_attn() for blk in lrp.model.blocks], ext_v_list = [blk.attn.get_v() for blk in lrp.model.blocks], ext_y_list=[blk.get_y() for blk in lrp.model.blocks]).reshape(data.shape[0], 1, 14, 14)
             elif args.method == 'perturb_none':
                 Res = lrp.generate_LRP(data, start_layer=0, method="perturb_all", index=cls_index).reshape(data.shape[0], 1, 14, 14)
-            elif args.method == 'perturb_patch':
-                Res = lrp.generate_LRP(data, start_layer=0, method="perturb_patch", index=cls_index).reshape(data.shape[0], 1, 14, 14)
-            elif args.method == 'perturb_patch_all':
-                Res = lrp.generate_LRP(data, start_layer=0, method="perturb_patch_all", index=cls_index, ext_attn_list=[blk.attn.get_attn() for blk in lrp.model.blocks], ext_v_list = [blk.attn.get_v() for blk in lrp.model.blocks], ext_y_list=[blk.get_y() for blk in lrp.model.blocks]).reshape(data.shape[0], 1, 14, 14)
             elif args.method == 'perturb_attn':
                 Res = lrp.generate_LRP(data, start_layer=0, method="perturb_all", index=cls_index, ext_attn_list=[blk.attn.get_attn() for blk in lrp.model.blocks]).reshape(data.shape[0], 1, 14, 14)
             elif args.method == 'perturb_attn_v':
