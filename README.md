@@ -1,4 +1,4 @@
-# Our code is based on [Transformer Interpretability Beyond Attention Visualization](https://arxiv.org/abs/2012.09838) [CVPR 2021]
+# Our code is based on [Transformer Interpretability Beyond Attention Visualization](https://arxiv.org/abs/2012.09838)
 
 
 ## Introduction: please refer to
