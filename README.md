@@ -1,4 +1,5 @@
-# Our code is based on [Transformer Interpretability Beyond Attention Visualization](https://arxiv.org/abs/2012.09838)
+# This is the official implementation of the paper [Efficient Shapley Values Calculation for Transformer Explainability] 
+Our code is based on [Transformer Interpretability Beyond Attention Visualization](https://arxiv.org/abs/2012.09838)
 
 
 ## Introduction: please refer to
